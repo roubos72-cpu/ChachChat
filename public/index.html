@@ -1,38 +1,76 @@
-<!DOCTYPE html>
-<html>
+<!doctype html>
+<html lang="en">
 <head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>ChachChat</title>
-  <style>
-    body { font-family: Arial; background:#111; color:#eee; }
-    ul { list-style:none; padding:0; }
-    li { padding:5px 0; }
-    input { width:80%; }
-  </style>
+  <link rel="icon" href="/favicon.ico" />
+  <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
-  <h1>ChachChat</h1>
-  <ul id="messages"></ul>
-  <input id="input" autocomplete="off" />
-  <button onclick="send()">Send</button>
+  <div class="app">
+    <header class="topbar card">
+      <div class="brand">
+        <div class="logo" title="Logo">
+          <!-- Put your real image at public/logo.png -->
+          <img src="/logo.png" alt="ChachChat logo" onerror="this.style.display='none'; this.parentElement.classList.add('logo-fallback');" />
+          <span class="logo-text">CC</span>
+        </div>
+        <div class="title">
+          <b>ChachChat</b>
+          <span id="subtitle">Realtime chat • no refresh needed</span>
+        </div>
+      </div>
+
+      <div class="me">
+        <div class="pill">
+          You are: <strong id="meName">Not set</strong>
+        </div>
+        <button class="btn" id="changeNameBtn" type="button">Change username</button>
+      </div>
+    </header>
+
+    <main class="main">
+      <section class="chat card">
+        <div id="chatlog" class="chatlog" aria-live="polite"></div>
+
+        <form id="chatForm" class="composer" autocomplete="off">
+          <input id="msgInput" class="input" placeholder="Type a message..." maxlength="500" />
+          <button class="btn primary" type="submit">Send</button>
+        </form>
+        <div class="footnote" id="status">Connecting…</div>
+      </section>
+
+      <aside class="side card">
+        <h3>Rules</h3>
+        <ul>
+          <li>Username is required.</li>
+          <li>Allowed: letters, numbers, space, <code>._-</code></li>
+          <li>Chat updates live for everyone.</li>
+        </ul>
+        <hr />
+        <h3>Tip</h3>
+        <p>If your logo is “broken”, make sure your file is named <code>logo.png</code> and is inside the <code>public/</code> folder.</p>
+        <p class="muted">This demo stores messages in memory. If the server restarts, history resets.</p>
+      </aside>
+    </main>
+  </div>
+
+  <!-- Username modal -->
+  <div class="modal" id="nameModal" aria-hidden="true">
+    <div class="modal-backdrop"></div>
+    <div class="modal-card card" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+      <h2 id="modalTitle">Choose a username</h2>
+      <p class="muted">Required. 2–24 characters. Letters/numbers/space/._-</p>
+      <form id="nameForm" class="nameform" autocomplete="off">
+        <input id="nameInput" class="input" maxlength="24" placeholder="e.g. Kyle" />
+        <button class="btn primary" type="submit">Continue</button>
+      </form>
+      <div class="error" id="nameError"></div>
+    </div>
+  </div>
 
   <script src="/socket.io/socket.io.js"></script>
-  <script>
-    const socket = io();
-    const messages = document.getElementById("messages");
-    const input = document.getElementById("input");
-
-    function send() {
-      if (input.value) {
-        socket.emit("chat message", input.value);
-        input.value = "";
-      }
-    }
-
-    socket.on("chat message", (msg) => {
-      const li = document.createElement("li");
-      li.textContent = msg;
-      messages.appendChild(li);
-    });
-  </script>
+  <script src="/client.js"></script>
 </body>
 </html>
