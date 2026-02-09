@@ -1,230 +1,237 @@
-(() => {
-  const $ = (id) => document.getElementById(id);
+/* global io */
+const $ = (id) => document.getElementById(id);
 
-  const messagesEl = $("messages");
-  const form = $("form");
-  const text = $("text");
+const authModal = $("authModal");
+const tabSignIn = $("tabSignIn");
+const tabCreate = $("tabCreate");
+const authSubmit = $("authSubmit");
+const authAlert = $("authAlert");
+const authUsername = $("authUsername");
+const authPassword = $("authPassword");
 
-  const who = $("who");
-  const statusEl = $("status");
-  const btnLogout = $("btnLogout");
+const statusDot = $("statusDot");
+const statusText = $("statusText");
+const userPill = $("userPill");
+const meName = $("meName");
+const logoutBtn = $("logoutBtn");
 
-  const authModal = $("authModal");
-  const authBackdrop = $("authBackdrop");
-  const authError = $("authError");
-  const authUser = $("authUser");
-  const authPass = $("authPass");
-  const authSubmit = $("authSubmit");
-  const tabLogin = $("tabLogin");
-  const tabRegister = $("tabRegister");
+const messagesEl = $("messages");
+const composer = $("composer");
+const messageInput = $("messageInput");
 
-  let mode = "login"; // or "register"
-  let token = localStorage.getItem("chachchat_token") || "";
-  let username = localStorage.getItem("chachchat_username") || "";
-  let es = null;
+let mode = "login"; // or "register"
+let token = localStorage.getItem("chachchat_token") || "";
+let socket = null;
 
-  function setConnected(on) {
-    statusEl.innerHTML = on
-      ? '<span class="dot ok"></span>Connected'
-      : '<span class="dot"></span>Disconnected';
+function setAlert(msg, kind = "error") {
+  if (!msg) {
+    authAlert.hidden = true;
+    authAlert.textContent = "";
+    authAlert.className = "alert";
+    return;
+  }
+  authAlert.hidden = false;
+  authAlert.textContent = msg;
+  authAlert.className = "alert " + (kind === "ok" ? "ok" : "error");
+}
+
+function openModal() {
+  authModal.classList.add("open");
+  authModal.setAttribute("aria-hidden", "false");
+  setAlert("");
+  authPassword.value = "";
+  setTimeout(() => authUsername.focus(), 50);
+}
+
+function closeModal() {
+  authModal.classList.remove("open");
+  authModal.setAttribute("aria-hidden", "true");
+  setAlert("");
+}
+
+function setMode(next) {
+  mode = next;
+  const isLogin = mode === "login";
+  tabSignIn.classList.toggle("active", isLogin);
+  tabCreate.classList.toggle("active", !isLogin);
+  authSubmit.textContent = isLogin ? "Sign in" : "Create account";
+  authPassword.autocomplete = isLogin ? "current-password" : "new-password";
+  setAlert("");
+}
+
+tabSignIn.addEventListener("click", () => setMode("login"));
+tabCreate.addEventListener("click", () => setMode("register"));
+
+async function api(path, opts = {}) {
+  const headers = { "Content-Type": "application/json", ...(opts.headers || {}) };
+  if (token) headers["Authorization"] = "Bearer " + token;
+  const res = await fetch(path, { ...opts, headers });
+  let data = null;
+  try { data = await res.json(); } catch { data = null; }
+  return { res, data };
+}
+
+function setStatus(connected) {
+  statusDot.classList.toggle("on", !!connected);
+  statusText.textContent = connected ? "Connected" : "Disconnected";
+}
+
+function esc(s) {
+  return (s ?? "").toString()
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
+function fmtTime(ts) {
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+function addMessage(m, toBottom = true) {
+  const row = document.createElement("div");
+  row.className = "msg";
+  row.innerHTML = `
+    <div class="msgMeta">
+      <span class="msgUser">${esc(m.username)}</span>
+      <span class="msgTime">${esc(fmtTime(m.ts))}</span>
+    </div>
+    <div class="msgText">${esc(m.text)}</div>
+  `;
+  messagesEl.appendChild(row);
+  if (toBottom) messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+
+function clearMessages() {
+  messagesEl.innerHTML = "";
+}
+
+function connectSocket() {
+  if (!token) return;
+
+  if (socket) {
+    socket.disconnect();
+    socket = null;
   }
 
-  function showAuth(show) {
-    authModal.hidden = !show;
-    authBackdrop.hidden = !show;
-    if (show) {
-      authUser.value = username || "";
-      authPass.value = "";
-      authUser.focus();
+  socket = io({
+    auth: { token }
+  });
+
+  socket.on("connect", () => setStatus(true));
+  socket.on("disconnect", () => setStatus(false));
+
+  socket.on("connect_error", (err) => {
+    setStatus(false);
+    // session expired -> show modal
+    if ((err?.message || "").toLowerCase().includes("expired")) {
+      localStorage.removeItem("chachchat_token");
+      token = "";
+      openModal();
+      setAlert("Session expired. Please sign in again.");
     }
-  }
+  });
 
-  function setAuthError(msg) {
-    if (!msg) {
-      authError.hidden = true;
-      authError.textContent = "";
+  socket.on("init", (payload) => {
+    clearMessages();
+    const msgs = payload?.messages || [];
+    msgs.forEach((m) => addMessage(m, false));
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+  });
+
+  socket.on("message", (m) => addMessage(m, true));
+}
+
+async function ensureSignedIn() {
+  if (!token) {
+    openModal();
+    return false;
+  }
+  const { res } = await api("/api/me");
+  if (!res.ok) {
+    localStorage.removeItem("chachchat_token");
+    token = "";
+    openModal();
+    return false;
+  }
+  return true;
+}
+
+async function afterAuth() {
+  const { data } = await api("/api/me");
+  const username = data?.username || "";
+  meName.textContent = username;
+  userPill.hidden = !username;
+  logoutBtn.hidden = !username;
+  closeModal();
+  connectSocket();
+}
+
+authSubmit.addEventListener("click", async () => {
+  const username = authUsername.value.trim();
+  const password = authPassword.value;
+
+  setAlert("");
+  authSubmit.disabled = true;
+
+  try {
+    const path = mode === "login" ? "/api/login" : "/api/register";
+    const { res, data } = await api(path, {
+      method: "POST",
+      body: JSON.stringify({ username, password })
+    });
+
+    if (!res.ok) {
+      setAlert(data?.error || "Request failed");
       return;
     }
-    authError.hidden = false;
-    authError.textContent = msg;
+
+    token = data.token;
+    localStorage.setItem("chachchat_token", token);
+    await afterAuth();
+  } catch (e) {
+    setAlert("Request failed");
+  } finally {
+    authSubmit.disabled = false;
   }
+});
 
-  function setMode(next) {
-    mode = next;
-    tabLogin.classList.toggle("active", mode === "login");
-    tabRegister.classList.toggle("active", mode === "register");
-    authSubmit.textContent = mode === "login" ? "Sign in" : "Create account";
-    setAuthError("");
+authPassword.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") authSubmit.click();
+});
+
+logoutBtn.addEventListener("click", async () => {
+  try { await api("/api/logout", { method: "POST" }); } catch {}
+  localStorage.removeItem("chachchat_token");
+  token = "";
+  setStatus(false);
+  userPill.hidden = true;
+  logoutBtn.hidden = true;
+  if (socket) socket.disconnect();
+  openModal();
+});
+
+composer.addEventListener("submit", (e) => {
+  e.preventDefault();
+  const text = messageInput.value.trim();
+  if (!text) return;
+  messageInput.value = "";
+
+  // send via socket (fast); fallback to HTTP if socket isn't connected
+  if (socket && socket.connected) {
+    socket.emit("send", { text });
+  } else {
+    api("/api/messages", { method: "POST", body: JSON.stringify({ text }) }).catch(() => {});
   }
+});
 
-  tabLogin.addEventListener("click", () => setMode("login"));
-  tabRegister.addEventListener("click", () => setMode("register"));
+(async function boot() {
+  setMode("login");
+  setStatus(false);
 
-  async function api(path, options = {}) {
-    const headers = options.headers || {};
-    if (token) headers["Authorization"] = "Bearer " + token;
-    headers["Content-Type"] = "application/json";
-    const res = await fetch(path, { ...options, headers });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || "Request failed");
-    return data;
-  }
-
-  function escapeHtml(s) {
-    return String(s)
-      .replaceAll("&", "&amp;")
-      .replaceAll("<", "&lt;")
-      .replaceAll(">", "&gt;")
-      .replaceAll('"', "&quot;")
-      .replaceAll("'", "&#039;");
-  }
-
-  function addMessage(msg) {
-    const div = document.createElement("div");
-    div.className = "msg";
-
-    const time = new Date(msg.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-    div.innerHTML = `
-      <div class="meta">
-        <span class="user">${escapeHtml(msg.username)}</span>
-        <span class="time">${escapeHtml(time)}</span>
-      </div>
-      <div class="text">${escapeHtml(msg.text)}</div>
-    `;
-    messagesEl.appendChild(div);
-    messagesEl.scrollTop = messagesEl.scrollHeight;
-  }
-
-  function resetMessages() {
-    messagesEl.innerHTML = "";
-  }
-
-  async function loadInitial() {
-    const data = await api("/api/messages?limit=80");
-    resetMessages();
-    for (const m of data.messages) addMessage(m);
-  }
-
-  function connectStream() {
-    if (es) es.close();
-    setConnected(false);
-
-    // SSE doesn't support custom headers, so we pass token in query.
-    // (Token is random; still keep it short-lived.)
-    es = new EventSource(`/api/stream?token=${encodeURIComponent(token)}`);
-
-    es.addEventListener("open", () => setConnected(true));
-    es.addEventListener("error", () => setConnected(false));
-
-    es.addEventListener("hello", (e) => {
-      try {
-        const payload = JSON.parse(e.data);
-        resetMessages();
-        for (const m of payload.recent || []) addMessage(m);
-      } catch {}
-    });
-
-    es.addEventListener("message", (e) => {
-      try {
-        const msg = JSON.parse(e.data);
-        addMessage(msg);
-      } catch {}
-    });
-  }
-
-  // Because we need token in SSE query, we also accept it on server via query param.
-  // We'll mirror token into localStorage and also into a global variable used in query.
-  // Server validates it in auth middleware for other endpoints; stream endpoint handles query param token.
-  // We'll do a small trick: rewrite EventSource URL to include token; server will read req.query.token.
-
-  // Patch: override connectStream to use token query param; server route reads query token.
-  // (Already done above.)
-
-  async function doAuth() {
-    const u = authUser.value.trim();
-    const p = authPass.value;
-    setAuthError("");
-
-    if (!u) return setAuthError("Enter a username.");
-    if (u.length < 2 || u.length > 24) return setAuthError("Username must be 2–24 characters.");
-    if (!/^[A-Za-z0-9 _.-]+$/.test(u)) return setAuthError("Username can only use letters, numbers, spaces, _ . -");
-    if (!p || p.length < 4) return setAuthError("Password must be at least 4 characters.");
-
-    try {
-      const endpoint = mode === "login" ? "/api/login" : "/api/register";
-      const data = await api(endpoint, { method: "POST", body: JSON.stringify({ username: u, password: p }) });
-      token = data.token;
-      username = data.username;
-      localStorage.setItem("chachchat_token", token);
-      localStorage.setItem("chachchat_username", username);
-
-      who.textContent = `You are: ${username}`;
-      btnLogout.hidden = false;
-
-      showAuth(false);
-      await loadInitial();
-      connectStream();
-      text.focus();
-    } catch (err) {
-      setAuthError(err.message || "Login failed");
-    }
-  }
-
-  authSubmit.addEventListener("click", doAuth);
-  authPass.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") doAuth();
-  });
-
-  btnLogout.addEventListener("click", async () => {
-    try { await api("/api/logout", { method: "POST" }); } catch {}
-    token = "";
-    username = "";
-    localStorage.removeItem("chachchat_token");
-    localStorage.removeItem("chachchat_username");
-    btnLogout.hidden = true;
-    who.textContent = "Not signed in";
-    if (es) es.close();
-    setConnected(false);
-    showAuth(true);
-  });
-
-  form.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const t = text.value.trim();
-    if (!t) return;
-    text.value = "";
-    try {
-      await api("/api/messages", { method: "POST", body: JSON.stringify({ text: t }) });
-      // Message will arrive via SSE broadcast
-    } catch (err) {
-      alert(err.message || "Failed to send");
-    }
-  });
-
-  async function start() {
-    if (token) {
-      try {
-        const me = await api("/api/me");
-        username = me.username;
-        localStorage.setItem("chachchat_username", username);
-        who.textContent = `You are: ${username}`;
-        btnLogout.hidden = false;
-
-        await loadInitial();
-        connectStream();
-        return;
-      } catch {
-        // token invalid
-        token = "";
-        localStorage.removeItem("chachchat_token");
-      }
-    }
-    showAuth(true);
-  }
-
-  // --- SSE auth via query param ---
-  // EventSource cannot send Authorization headers, so we support ?token=.
-  // We keep other API calls using Bearer header.
-  // This is okay for a demo; for production you'd use cookies or a dedicated SSE token.
-  start();
+  const ok = await ensureSignedIn();
+  if (ok) await afterAuth();
 })();
