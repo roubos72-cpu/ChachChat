@@ -1,17 +1,12 @@
 {
   "name": "chachchat",
-  "version": "1.0.0",
-  "private": true,
-  "description": "Simple realtime chat with enforced usernames (Railway-friendly)",
+  "version": "1.0.1",
+  "type": "module",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
-    "express": "^4.19.2",
-    "socket.io": "^4.8.1"
-  },
-  "engines": {
-    "node": ">=18"
+    "express": "^4.19.2"
   }
 }
