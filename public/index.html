@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>ChachChat</title>
+  <style>
+    body { font-family: Arial; background:#111; color:#eee; }
+    ul { list-style:none; padding:0; }
+    li { padding:5px 0; }
+    input { width:80%; }
+  </style>
+</head>
+<body>
+  <h1>ChachChat</h1>
+  <ul id="messages"></ul>
+  <input id="input" autocomplete="off" />
+  <button onclick="send()">Send</button>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+    const socket = io();
+    const messages = document.getElementById("messages");
+    const input = document.getElementById("input");
+
+    function send() {
+      if (input.value) {
+        socket.emit("chat message", input.value);
+        input.value = "";
+      }
+    }
+
+    socket.on("chat message", (msg) => {
+      const li = document.createElement("li");
+      li.textContent = msg;
+      messages.appendChild(li);
+    });
+  </script>
+</body>
+</html>
