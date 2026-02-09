@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>ChachChat</title>
+<style>
+body {
+  background:#111;
+  color:#eee;
+  font-family: Arial, sans-serif;
+  margin:0;
+  padding:0;
+}
+header {
+  display:flex;
+  align-items:center;
+  gap:15px;
+  padding:10px;
+  background:#1b1b1b;
+}
+header img {
+  height:40px;
+}
+#chat {
+  padding:10px;
+  height:70vh;
+  overflow-y:auto;
+}
+.message {
+  margin-bottom:6px;
+}
+.username {
+  font-weight:bold;
+  color:#6cf;
+}
+#inputBar {
+  display:flex;
+  padding:10px;
+  gap:5px;
+}
+#inputBar input {
+  flex:1;
+  padding:8px;
+}
+#inputBar button {
+  padding:8px 12px;
+}
+</style>
+</head>
+<body>
+
+<header>
+  <img src="/logo.png" alt="Logo">
+  <h2>ChachChat</h2>
+</header>
+
+<div id="chat"></div>
+
+<div id="inputBar">
+  <input id="messageInput" placeholder="Type message..." />
+  <button onclick="sendMessage()">Send</button>
+</div>
+
+<script>
+let username = localStorage.getItem("username");
+
+while (!username) {
+  username = prompt("Enter your username:");
+  if (username) localStorage.setItem("username", username);
+}
+
+async function loadMessages() {
+  const res = await fetch("/messages");
+  const data = await res.json();
+  const chat = document.getElementById("chat");
+  chat.innerHTML = "";
+  data.messages.forEach(m => {
+    const div = document.createElement("div");
+    div.className = "message";
+    div.innerHTML = `<span class='username'>${m.user}:</span> ${m.text}`;
+    chat.appendChild(div);
+  });
+  chat.scrollTop = chat.scrollHeight;
+}
+
+async function sendMessage() {
+  const input = document.getElementById("messageInput");
+  if (!input.value) return;
+  await fetch("/messages", {
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({ user: username, text: input.value })
+  });
+  input.value = "";
+  loadMessages();
+}
+
+setInterval(loadMessages, 1000);
+loadMessages();
+</script>
+
+</body>
+</html>
