@@ -1,26 +1,98 @@
-<!DOCTYPE html>
-<html>
+<!doctype html>
+<html lang="en">
 <head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <title>ChachChat</title>
-  <link rel="stylesheet" href="styles.css">
+  <link rel="icon" href="/favicon.ico"/>
+  <link rel="stylesheet" href="/styles.css"/>
 </head>
 <body>
-<div id="login">
-  <img src="logo.png" class="logo">
-  <input id="user" placeholder="Username">
-  <input id="pass" type="password" placeholder="Password">
-  <button onclick="register()">Create Account</button>
-  <button onclick="login()">Sign In</button>
-  <div id="err"></div>
-</div>
+  <div class="bg"></div>
 
-<div id="chat" hidden>
-  <div id="messages"></div>
-  <input id="msg" placeholder="Type a message">
-  <button onclick="send()">Send</button>
-</div>
+  <header class="topbar">
+    <div class="brand">
+      <img class="brand-logo" src="/logo.png" alt="ChachChat logo" onerror="this.style.display='none'"/>
+      <div class="brand-text">
+        <div class="brand-name">ChachChat</div>
+        <div class="brand-sub">Realtime chat • no refresh needed</div>
+      </div>
+    </div>
 
-<script src="/socket.io/socket.io.js"></script>
-<script src="client.js"></script>
+    <div class="account">
+      <div class="who" id="who">Not signed in</div>
+      <button class="btn" id="btnLogout" hidden>Log out</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section class="chat card">
+      <div class="card-header">
+        <div class="title">Chat</div>
+        <div class="status" id="status"><span class="dot"></span>Disconnected</div>
+      </div>
+
+      <div id="messages" class="messages" aria-live="polite"></div>
+
+      <form id="form" class="composer" autocomplete="off">
+        <input id="text" class="input" placeholder="Type a message…" maxlength="500" />
+        <button class="btn primary" type="submit">Send</button>
+      </form>
+      <div class="hint">Tip: hit <b>Enter</b> to send.</div>
+    </section>
+
+    <aside class="side card">
+      <div class="title">Rules</div>
+      <ul class="rules">
+        <li>Be respectful.</li>
+        <li>Username + password required.</li>
+        <li>Chat updates live for everyone.</li>
+      </ul>
+      <div class="footer-note">
+        This demo stores users + messages in SQLite. If the server redeploys, history may reset.
+      </div>
+    </aside>
+  </main>
+
+  <!-- Auth Modal -->
+  <div class="modal-backdrop" id="authBackdrop" hidden></div>
+  <div class="modal" id="authModal" role="dialog" aria-modal="true" aria-labelledby="authTitle" hidden>
+    <div class="modal-head">
+      <div class="modal-brand">
+        <img class="modal-logo" src="/logo.png" alt="ChachChat logo" onerror="this.style.display='none'"/>
+        <div>
+          <div class="modal-title" id="authTitle">Welcome to ChachChat</div>
+          <div class="modal-sub">Create an account or sign in to chat.</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="tabs">
+      <button class="tab active" id="tabLogin" type="button">Sign in</button>
+      <button class="tab" id="tabRegister" type="button">Create account</button>
+    </div>
+
+    <div class="modal-body">
+      <div class="error" id="authError" hidden></div>
+
+      <div class="field">
+        <label for="authUser">Username</label>
+        <input id="authUser" class="input" placeholder="e.g., Kyle" maxlength="24" />
+      </div>
+
+      <div class="field">
+        <label for="authPass">Password</label>
+        <input id="authPass" class="input" type="password" placeholder="Your password" maxlength="64" />
+      </div>
+
+      <button class="btn primary full" id="authSubmit" type="button">Sign in</button>
+
+      <div class="smallprint">
+        Username allowed: letters, numbers, spaces, <code>_ . -</code> (2–24 chars). Password: 4–64 chars.
+      </div>
+    </div>
+  </div>
+
+  <script src="/client.js"></script>
 </body>
 </html>
