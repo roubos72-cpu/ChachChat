@@ -1,213 +1,201 @@
-/**
- * ChachChat - simple realtime-ish chat with per-user accounts (username + password).
- * - No external DB (stores JSON files). Good for small demos.
- * - IMPORTANT: Storage on Railway free tier may reset; treat as demo.
- */
-import express from "express";
-import path from "path";
-import fs from "fs";
-import crypto from "crypto";
-import { fileURLToPath } from "url";
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const path = require("path");
+const fs = require("fs");
+const http = require("http");
+const express = require("express");
+const { Server } = require("socket.io");
+const bcrypt = require("bcryptjs");
+const Database = require("better-sqlite3");
+const { nanoid } = require("nanoid");
 
 const app = express();
-app.use(express.json({ limit: "128kb" }));
+app.use(express.json({ limit: "200kb" }));
 
-// ---------- Config ----------
-const PORT = Number(process.env.PORT || 3000);
-const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, "data");
-const USERS_FILE = path.join(DATA_DIR, "users.json");
-const MSG_FILE = path.join(DATA_DIR, "messages.json");
+// ----- DB (SQLite) -----
+const dataDir = process.env.RAILWAY_VOLUME_MOUNT_PATH || path.join(__dirname, "data");
+if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
+const dbPath = path.join(dataDir, "chachchat.db");
+const db = new Database(dbPath);
 
-// Sign tokens so we don't need to store sessions.
-// Set TOKEN_SECRET in Railway Variables for better security.
-const TOKEN_SECRET = process.env.TOKEN_SECRET || "change-me-in-railway-variables";
+db.exec(`
+CREATE TABLE IF NOT EXISTS users (
+  username TEXT PRIMARY KEY,
+  passhash TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
 
-// Limits
-const MAX_MESSAGES = 500;
-const MAX_TEXT_LEN = 500;
+CREATE TABLE IF NOT EXISTS sessions (
+  token TEXT PRIMARY KEY,
+  username TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  FOREIGN KEY(username) REFERENCES users(username)
+);
 
-// Username rules (match UI copy)
+CREATE TABLE IF NOT EXISTS messages (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  username TEXT NOT NULL,
+  text TEXT NOT NULL,
+  ts INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_messages_ts ON messages(ts);
+`);
+
 const USERNAME_RE = /^[A-Za-z0-9 _.-]{2,24}$/;
 
-// ---------- Tiny JSON store helpers ----------
-function ensureDataDir() {
-  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-  if (!fs.existsSync(USERS_FILE)) fs.writeFileSync(USERS_FILE, JSON.stringify({ users: {} }, null, 2));
-  if (!fs.existsSync(MSG_FILE)) fs.writeFileSync(MSG_FILE, JSON.stringify({ messages: [] }, null, 2));
+// ----- Helpers -----
+function bad(res, code, msg) {
+  return res.status(code).json({ ok: false, error: msg });
 }
 
-function readJson(file, fallback) {
-  try {
-    return JSON.parse(fs.readFileSync(file, "utf8"));
-  } catch {
-    return fallback;
-  }
-}
-function writeJson(file, obj) {
-  fs.writeFileSync(file, JSON.stringify(obj, null, 2));
+function validateUsername(username) {
+  if (typeof username !== "string") return "Username required.";
+  const u = username.trim();
+  if (!USERNAME_RE.test(u)) return "Username must be 2–24 chars: letters, numbers, space, _ . -";
+  return null;
 }
 
-ensureDataDir();
-
-// In-memory caches (loaded from disk at startup)
-let usersDb = readJson(USERS_FILE, { users: {} });   // { users: { [username]: { salt, hash, createdAt } } }
-let msgDb = readJson(MSG_FILE, { messages: [] });    // { messages: [{ id, at, user, text }] }
-
-// ---------- Password hashing ----------
-function hashPassword(password, saltB64) {
-  const salt = saltB64 ? Buffer.from(saltB64, "base64") : crypto.randomBytes(16);
-  const hash = crypto.pbkdf2Sync(password, salt, 120_000, 32, "sha256");
-  return {
-    salt: salt.toString("base64"),
-    hash: hash.toString("base64"),
-  };
-}
-function constantTimeEqual(aB64, bB64) {
-  const a = Buffer.from(aB64, "base64");
-  const b = Buffer.from(bB64, "base64");
-  if (a.length !== b.length) return false;
-  return crypto.timingSafeEqual(a, b);
+function validatePassword(password) {
+  if (typeof password !== "string") return "Password required.";
+  if (password.length < 4 || password.length > 64) return "Password must be 4–64 characters.";
+  return null;
 }
 
-// ---------- Token helpers ----------
-function b64url(buf) {
-  return Buffer.from(buf).toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
-}
-function unb64url(str) {
-  str = str.replace(/-/g, "+").replace(/_/g, "/");
-  while (str.length % 4) str += "=";
-  return Buffer.from(str, "base64");
-}
-function signToken(payloadObj) {
-  const payload = JSON.stringify(payloadObj);
-  const payloadB64 = b64url(payload);
-  const sig = crypto.createHmac("sha256", TOKEN_SECRET).update(payloadB64).digest();
-  const sigB64 = b64url(sig);
-  return `${payloadB64}.${sigB64}`;
-}
-function verifyToken(token) {
-  const parts = String(token || "").split(".");
-  if (parts.length !== 2) return null;
-  const [payloadB64, sigB64] = parts;
-  const expected = b64url(crypto.createHmac("sha256", TOKEN_SECRET).update(payloadB64).digest());
-  if (expected !== sigB64) return null;
-  try {
-    const payload = JSON.parse(unb64url(payloadB64).toString("utf8"));
-    if (!payload?.u || !payload?.exp) return null;
-    if (Date.now() > payload.exp) return null;
-    return payload; // { u, exp }
-  } catch {
-    return null;
-  }
+function getToken(req) {
+  const h = req.headers["authorization"] || "";
+  const m = /^Bearer\s+(.+)$/i.exec(h);
+  return m ? m[1].trim() : null;
 }
 
-function makeToken(username) {
-  // 7 days
-  return signToken({ u: username, exp: Date.now() + 7 * 24 * 60 * 60 * 1000 });
-}
-
-// ---------- Auth middleware ----------
 function auth(req, res, next) {
-  const hdr = req.headers.authorization || "";
-  const m = hdr.match(/^Bearer (.+)$/i);
-  if (!m) return res.status(401).json({ ok: false, error: "Missing token" });
-  const payload = verifyToken(m[1]);
-  if (!payload) return res.status(401).json({ ok: false, error: "Invalid token" });
-  const username = payload.u;
-  if (!usersDb.users[username]) return res.status(401).json({ ok: false, error: "Unknown user" });
-  req.user = username;
+  const token = getToken(req);
+  if (!token) return bad(res, 401, "Not signed in.");
+  const row = db.prepare("SELECT username FROM sessions WHERE token=?").get(token);
+  if (!row) return bad(res, 401, "Session expired. Please sign in again.");
+  req.user = { username: row.username, token };
   next();
 }
 
-// ---------- API ----------
-app.get("/api/health", (req, res) => res.json({ ok: true }));
+// ----- Static files -----
+app.use(express.static(path.join(__dirname, "public"), { extensions: ["html"] }));
 
+// ----- API -----
 app.post("/api/register", (req, res) => {
-  const username = String(req.body?.username || "").trim();
-  const password = String(req.body?.password || "");
+  const { username, password } = req.body || {};
+  const uErr = validateUsername(username);
+  if (uErr) return bad(res, 400, uErr);
+  const pErr = validatePassword(password);
+  if (pErr) return bad(res, 400, pErr);
 
-  if (!USERNAME_RE.test(username)) {
-    return res.status(400).json({ ok: false, error: "Username must be 2–24 chars. Allowed: letters, numbers, space, _ . -" });
-  }
-  if (password.length < 4 || password.length > 64) {
-    return res.status(400).json({ ok: false, error: "Password must be 4–64 characters." });
-  }
-  if (usersDb.users[username]) {
-    return res.status(409).json({ ok: false, error: "That username is already taken." });
-  }
+  const u = username.trim();
 
-  const { salt, hash } = hashPassword(password);
-  usersDb.users[username] = { salt, hash, createdAt: new Date().toISOString() };
-  writeJson(USERS_FILE, usersDb);
+  const existing = db.prepare("SELECT username FROM users WHERE username=?").get(u);
+  if (existing) return bad(res, 409, "That username is already taken.");
 
-  const token = makeToken(username);
-  return res.json({ ok: true, token, username });
+  const passhash = bcrypt.hashSync(password, 10);
+  db.prepare("INSERT INTO users(username, passhash, created_at) VALUES(?,?,?)")
+    .run(u, passhash, Date.now());
+
+  // auto-login after register
+  const token = nanoid(32);
+  db.prepare("INSERT INTO sessions(token, username, created_at) VALUES(?,?,?)")
+    .run(token, u, Date.now());
+
+  res.json({ ok: true, token, username: u });
 });
 
 app.post("/api/login", (req, res) => {
-  const username = String(req.body?.username || "").trim();
-  const password = String(req.body?.password || "");
-  const rec = usersDb.users[username];
-  if (!rec) return res.status(401).json({ ok: false, error: "Wrong username or password." });
+  const { username, password } = req.body || {};
+  const uErr = validateUsername(username);
+  if (uErr) return bad(res, 400, uErr);
+  const pErr = validatePassword(password);
+  if (pErr) return bad(res, 400, pErr);
 
-  const { hash } = hashPassword(password, rec.salt);
-  if (!constantTimeEqual(hash, rec.hash)) {
-    return res.status(401).json({ ok: false, error: "Wrong username or password." });
-  }
+  const u = username.trim();
+  const row = db.prepare("SELECT username, passhash FROM users WHERE username=?").get(u);
+  if (!row) return bad(res, 401, "Wrong username or password.");
 
-  const token = makeToken(username);
-  return res.json({ ok: true, token, username });
+  const ok = bcrypt.compareSync(password, row.passhash);
+  if (!ok) return bad(res, 401, "Wrong username or password.");
+
+  const token = nanoid(32);
+  db.prepare("INSERT INTO sessions(token, username, created_at) VALUES(?,?,?)")
+    .run(token, u, Date.now());
+
+  res.json({ ok: true, token, username: u });
+});
+
+app.post("/api/logout", auth, (req, res) => {
+  db.prepare("DELETE FROM sessions WHERE token=?").run(req.user.token);
+  res.json({ ok: true });
 });
 
 app.get("/api/me", auth, (req, res) => {
-  res.json({ ok: true, username: req.user });
+  res.json({ ok: true, username: req.user.username });
 });
 
 app.get("/api/messages", auth, (req, res) => {
-  const since = Number(req.query.since || 0);
-  const now = Date.now();
-  const messages = msgDb.messages.filter(m => m.at > since);
-  res.json({ ok: true, messages, now });
+  const msgs = db.prepare(
+    "SELECT id, username, text, ts FROM messages ORDER BY ts DESC LIMIT 100"
+  ).all().reverse();
+  res.json({ ok: true, messages: msgs });
 });
 
 app.post("/api/messages", auth, (req, res) => {
-  const text = String(req.body?.text || "").trim();
-  if (!text) return res.status(400).json({ ok: false, error: "Message is empty." });
-  if (text.length > MAX_TEXT_LEN) return res.status(400).json({ ok: false, error: `Message too long (max ${MAX_TEXT_LEN}).` });
+  const { text } = req.body || {};
+  if (typeof text !== "string") return bad(res, 400, "Message required.");
+  const cleaned = text.trim();
+  if (!cleaned) return bad(res, 400, "Message required.");
+  if (cleaned.length > 500) return bad(res, 400, "Message too long (max 500).");
 
-  const msg = {
-    id: crypto.randomUUID(),
-    at: Date.now(),
-    user: req.user,
-    text,
-  };
-  msgDb.messages.push(msg);
-  if (msgDb.messages.length > MAX_MESSAGES) msgDb.messages.splice(0, msgDb.messages.length - MAX_MESSAGES);
-  writeJson(MSG_FILE, msgDb);
+  const ts = Date.now();
+  const info = db.prepare("INSERT INTO messages(username, text, ts) VALUES(?,?,?)")
+    .run(req.user.username, cleaned, ts);
 
+  const msg = { id: info.lastInsertRowid, username: req.user.username, text: cleaned, ts };
+  io.emit("message", msg);
   res.json({ ok: true, message: msg });
 });
 
-// Optional: serve favicon to stop console 404 noise
-app.get("/favicon.ico", (req, res) => {
-  const ico = path.join(__dirname, "public", "favicon.ico");
-  if (fs.existsSync(ico)) return res.sendFile(ico);
-  res.status(204).end();
+// ----- Socket.IO -----
+const server = http.createServer(app);
+const io = new Server(server, {
+  cors: { origin: true, credentials: false }
 });
 
-// ---------- Static site ----------
-app.use(express.static(path.join(__dirname, "public"), {
-  extensions: ["html"]
-}));
+function socketAuth(socket, next) {
+  const token = socket.handshake.auth?.token || socket.handshake.query?.token;
+  if (!token) return next(new Error("Not signed in"));
+  const row = db.prepare("SELECT username FROM sessions WHERE token=?").get(String(token));
+  if (!row) return next(new Error("Session expired"));
+  socket.user = { username: row.username, token: String(token) };
+  next();
+}
 
-// SPA-ish fallback (if someone hits /)
-app.get("*", (req, res) => {
-  res.sendFile(path.join(__dirname, "public", "index.html"));
+io.use(socketAuth);
+
+io.on("connection", (socket) => {
+  // Send recent messages on connect (already signed in)
+  const msgs = db.prepare(
+    "SELECT id, username, text, ts FROM messages ORDER BY ts DESC LIMIT 100"
+  ).all().reverse();
+  socket.emit("init", { messages: msgs, username: socket.user.username });
+
+  socket.on("send", (payload) => {
+    const text = (payload?.text ?? "").toString().trim();
+    if (!text) return;
+    if (text.length > 500) return;
+
+    const ts = Date.now();
+    const info = db.prepare("INSERT INTO messages(username, text, ts) VALUES(?,?,?)")
+      .run(socket.user.username, text, ts);
+
+    const msg = { id: info.lastInsertRowid, username: socket.user.username, text, ts };
+    io.emit("message", msg);
+  });
 });
 
-app.listen(PORT, "0.0.0.0", () => {
+// ----- Start -----
+const PORT = Number(process.env.PORT || 3000);
+server.listen(PORT, () => {
   console.log(`ChachChat listening on port ${PORT}`);
 });

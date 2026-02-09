@@ -1,10 +1,10 @@
-# ChachChat (Per-user password)
+# ChachChat
 
-- Users create their own username + password (stored hashed in SQLite).
-- After login, chat works in realtime (SSE).
-- Put your logo image at `public/logo.png` (and optionally `public/favicon.ico`).
+Upload these files to your GitHub repo (overwrite existing).
 
-## Run locally
-npm install
-npm start
-Open http://localhost:3000
+- `logo.png` should be in `public/logo.png` (your gorilla logo).
+- Start command: `npm start` (or just leave default).
+
+Routes:
+- `/` -> UI
+- Socket.IO used for realtime messages.
