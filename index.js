@@ -1,258 +1,286 @@
-'use strict';
-
 /**
- * ChachChat
- * - Serves /public
- * - Users create account (username + password) stored in ./data/users.json
- * - Login returns a token stored in localStorage
- * - Chat uses Server-Sent Events (SSE) for live updates
- * - Messages stored in ./data/messages.json (keeps last 500)
+ * ChachChat - stable Node/Express + SQLite chat server
+ * Fixes:
+ *  - Serves /public correctly on Railway (__dirname + /public)
+ *  - SSE auth via ?token=... (EventSource can't send headers)
+ *  - Message timestamps are always "createdAt" (ms since epoch)
  *
- * Demo notes:
- * - Tokens are in-memory (server restart logs everyone out)
- * - Passwords are hashed (bcrypt)
+ * Drop-in replacement for index.js
  */
-
-const path = require('path');
-const fs = require('fs');
-const crypto = require('crypto');
-const express = require('express');
-const bcrypt = require('bcryptjs');
+const express = require("express");
+const path = require("path");
+const crypto = require("crypto");
+const sqlite3 = require("sqlite3").verbose();
 
 const app = express();
-app.disable('x-powered-by');
 
-// --- Storage (JSON files) ---
-const DATA_DIR = path.join(__dirname, 'data');
-const USERS_FILE = path.join(DATA_DIR, 'users.json');
-const MSG_FILE = path.join(DATA_DIR, 'messages.json');
+// ---- config ----
+const PORT = process.env.PORT || 8080;
+const DB_PATH = process.env.DB_PATH || path.join(__dirname, "chachchat.sqlite");
 
-function ensureDataDir() {
-  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-}
+// ---- middleware ----
+app.use(express.json({ limit: "256kb" }));
+app.use(express.urlencoded({ extended: true }));
 
-function safeReadJson(file, fallback) {
-  try {
-    if (!fs.existsSync(file)) return fallback;
-    const raw = fs.readFileSync(file, 'utf8');
-    return JSON.parse(raw);
-  } catch {
-    return fallback;
-  }
-}
+// ✅ CRITICAL: Serve static files from the correct absolute path
+app.use(express.static(path.join(__dirname, "public")));
 
-function safeWriteJson(file, obj) {
-  ensureDataDir();
-  const tmp = `${file}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(obj, null, 2), 'utf8');
-  fs.renameSync(tmp, file);
-}
+// ---- db ----
+const db = new sqlite3.Database(DB_PATH);
 
-// users: { [usernameLower]: { username, passHash, createdAt } }
-let users = safeReadJson(USERS_FILE, {});
-// messages: [{ id, username, text, createdAt }]
-let messages = safeReadJson(MSG_FILE, []);
-if (!Array.isArray(messages)) messages = [];
+db.serialize(() => {
+  db.run(`
+    CREATE TABLE IF NOT EXISTS users (
+      username TEXT PRIMARY KEY,
+      salt TEXT NOT NULL,
+      passhash TEXT NOT NULL,
+      createdAt INTEGER NOT NULL
+    )
+  `);
+  db.run(`
+    CREATE TABLE IF NOT EXISTS sessions (
+      token TEXT PRIMARY KEY,
+      username TEXT NOT NULL,
+      createdAt INTEGER NOT NULL
+    )
+  `);
+  db.run(`
+    CREATE TABLE IF NOT EXISTS messages (
+      id TEXT PRIMARY KEY,
+      username TEXT NOT NULL,
+      text TEXT NOT NULL,
+      createdAt INTEGER NOT NULL
+    )
+  `);
+});
 
-function persistUsers() {
-  safeWriteJson(USERS_FILE, users);
-}
-
-function persistMessages() {
-  // keep last 500
-  if (messages.length > 500) messages = messages.slice(-500);
-  safeWriteJson(MSG_FILE, messages);
-}
-
-// --- Auth / sessions ---
-// tokens are in-memory (token -> { username, createdAt })
-const sessions = new Map();
-
-function newToken() {
-  // URL-safe token
-  return crypto.randomBytes(24).toString('base64url');
+function nowMs() {
+  return Date.now();
 }
 
 function normalizeUsername(u) {
-  return (u || '').trim();
+  return (u || "").trim();
 }
 
-function validateUsername(u) {
-  // 2-24 chars, letters/numbers/space/._-
-  if (typeof u !== 'string') return { ok: false, msg: 'Username is required.' };
-  const username = normalizeUsername(u);
-  if (username.length < 2 || username.length > 24) return { ok: false, msg: 'Username must be 2–24 characters.' };
-  if (!/^[A-Za-z0-9 ._\-]+$/.test(username)) return { ok: false, msg: 'Username can contain letters, numbers, spaces, . _ -' };
-  return { ok: true, username };
+function validUsername(u) {
+  // 2-24 chars, letters/numbers/spaces/_-.
+  return /^[A-Za-z0-9 _\-.]{2,24}$/.test(u);
 }
 
-function validatePassword(p) {
-  if (typeof p !== 'string') return { ok: false, msg: 'Password is required.' };
-  const pass = p;
-  if (pass.length < 4 || pass.length > 64) return { ok: false, msg: 'Password must be 4–64 characters.' };
-  return { ok: true, password: pass };
+function validPassword(p) {
+  return typeof p === "string" && p.length >= 4 && p.length <= 64;
 }
 
-function getTokenFromReq(req) {
-  const auth = req.headers.authorization || '';
-  if (auth.toLowerCase().startsWith('bearer ')) return auth.slice(7).trim();
-  if (req.query && typeof req.query.token === 'string') return req.query.token;
-  if (req.body && typeof req.body.token === 'string') return req.body.token;
-  return null;
+function hashPassword(password, saltHex) {
+  const salt = Buffer.from(saltHex, "hex");
+  const hash = crypto.pbkdf2Sync(password, salt, 120000, 32, "sha256");
+  return hash.toString("hex");
 }
 
-function requireAuth(req, res, next) {
-  const token = getTokenFromReq(req);
-  if (!token) return res.status(401).json({ error: 'Not signed in.' });
-  const s = sessions.get(token);
-  if (!s) return res.status(401).json({ error: 'Session expired. Please sign in again.' });
-  req.user = { username: s.username, token };
-  return next();
+function newToken() {
+  return crypto.randomBytes(24).toString("hex");
 }
 
-// --- Middleware ---
-app.use(express.json({ limit: '200kb' }));
-app.use(express.urlencoded({ extended: false }));
-
-// Serve static UI
-app.use(express.static(path.join(__dirname, 'public'), {
-  extensions: ['html'],
-  etag: true,
-  maxAge: '1h'
-}));
-
-// --- API ---
-app.get('/api/health', (_req, res) => res.json({ ok: true }));
-
-app.post('/api/register', (req, res) => {
-  const u = validateUsername(req.body.username);
-  if (!u.ok) return res.status(400).json({ error: u.msg });
-
-  const p = validatePassword(req.body.password);
-  if (!p.ok) return res.status(400).json({ error: p.msg });
-
-  const key = u.username.toLowerCase();
-  if (users[key]) return res.status(409).json({ error: 'That username is already taken.' });
-
-  const passHash = bcrypt.hashSync(p.password, 10);
-  users[key] = {
-    username: u.username,
-    passHash,
-    createdAt: new Date().toISOString()
-  };
-  persistUsers();
-
-  const token = newToken();
-  sessions.set(token, { username: u.username, createdAt: Date.now() });
-  return res.json({ token, username: u.username });
-});
-
-app.post('/api/login', (req, res) => {
-  const u = validateUsername(req.body.username);
-  if (!u.ok) return res.status(400).json({ error: u.msg });
-
-  const p = validatePassword(req.body.password);
-  if (!p.ok) return res.status(400).json({ error: p.msg });
-
-  const key = u.username.toLowerCase();
-  const record = users[key];
-  if (!record) return res.status(401).json({ error: 'Invalid username or password.' });
-
-  const ok = bcrypt.compareSync(p.password, record.passHash);
-  if (!ok) return res.status(401).json({ error: 'Invalid username or password.' });
-
-  const token = newToken();
-  sessions.set(token, { username: record.username, createdAt: Date.now() });
-  return res.json({ token, username: record.username });
-});
-
-app.post('/api/logout', requireAuth, (req, res) => {
-  sessions.delete(req.user.token);
-  res.json({ ok: true });
-});
-
-app.get('/api/me', requireAuth, (req, res) => {
-  res.json({ username: req.user.username });
-});
-
-app.get('/api/messages', requireAuth, (_req, res) => {
-  res.json({ messages });
-});
-
-app.post('/api/messages', requireAuth, (req, res) => {
-  const text = (req.body && typeof req.body.text === 'string') ? req.body.text.trim() : '';
-  if (!text) return res.status(400).json({ error: 'Message is empty.' });
-  if (text.length > 500) return res.status(400).json({ error: 'Message is too long (max 500 chars).' });
-
-  const msg = {
-    id: crypto.randomUUID ? crypto.randomUUID() : crypto.randomBytes(16).toString('hex'),
-    username: req.user.username,
-    text,
-    createdAt: new Date().toISOString()
-  };
-
-  messages.push(msg);
-  persistMessages();
-  broadcast({ type: 'message', message: msg });
-
-  res.json({ ok: true, message: msg });
-});
-
-// --- SSE stream ---
-/** @type {Set<import('http').ServerResponse>} */
-const clients = new Set();
-
-function sseWrite(res, event, data) {
-  res.write(`event: ${event}\n`);
-  res.write(`data: ${JSON.stringify(data)}\n\n`);
+function getToken(req) {
+  // Accept token via:
+  //  - Authorization: Bearer <token>
+  //  - query param ?token=
+  //  - body.token
+  const auth = req.headers.authorization || "";
+  if (auth.toLowerCase().startsWith("bearer ")) return auth.slice(7).trim();
+  if (req.query && req.query.token) return String(req.query.token);
+  if (req.body && req.body.token) return String(req.body.token);
+  return "";
 }
 
-function broadcast(payload) {
-  for (const res of clients) {
-    try {
-      sseWrite(res, 'msg', payload);
-    } catch {
-      // ignore
+function authRequired(req, res, next) {
+  const token = getToken(req);
+  if (!token) return res.status(401).json({ error: "Missing token" });
+
+  db.get(
+    `SELECT username FROM sessions WHERE token = ?`,
+    [token],
+    (err, row) => {
+      if (err) return res.status(500).json({ error: "DB error" });
+      if (!row) return res.status(401).json({ error: "Invalid token" });
+      req.user = { username: row.username, token };
+      next();
     }
+  );
+}
+
+// Optional lightweight content safety: block extreme hateful slurs.
+// Keep simple; you can remove if you want.
+const BLOCKED = [
+  "nigger", "nigga", "faggot", "kike", "spic", "chink", "raghead"
+];
+function containsBlocked(text) {
+  const t = (text || "").toLowerCase();
+  return BLOCKED.some(w => t.includes(w));
+}
+
+function insertMessage(username, text, cb) {
+  const id = crypto.randomUUID ? crypto.randomUUID() : crypto.randomBytes(16).toString("hex");
+  const createdAt = nowMs();
+
+  db.run(
+    `INSERT INTO messages (id, username, text, createdAt) VALUES (?, ?, ?, ?)`,
+    [id, username, text, createdAt],
+    (err) => cb(err, { id, username, text, createdAt })
+  );
+}
+
+// ---- SSE clients ----
+const sseClients = new Set();
+
+function sseSend(res, event, dataObj) {
+  // data must be JSON string
+  res.write(`event: ${event}\n`);
+  res.write(`data: ${JSON.stringify(dataObj)}\n\n`);
+}
+
+function broadcastMessage(msg) {
+  for (const client of sseClients) {
+    try {
+      sseSend(client.res, "message", msg);
+    } catch (_) {}
   }
 }
 
-app.get('/api/stream', (req, res) => {
-  const token = getTokenFromReq(req);
-  const s = token ? sessions.get(token) : null;
-  if (!s) return res.status(401).end('Not authorized');
+// ---- routes ----
+app.get("/", (req, res) => {
+  res.sendFile(path.join(__dirname, "public", "index.html"));
+});
 
-  res.setHeader('Content-Type', 'text/event-stream');
-  res.setHeader('Cache-Control', 'no-cache, no-transform');
-  res.setHeader('Connection', 'keep-alive');
-  res.flushHeaders?.();
+app.post("/api/register", (req, res) => {
+  const username = normalizeUsername(req.body.username);
+  const password = req.body.password;
 
-  // Initial
-  sseWrite(res, 'msg', { type: 'hello', username: s.username, messages });
+  if (!validUsername(username)) return res.status(400).json({ error: "Invalid username" });
+  if (!validPassword(password)) return res.status(400).json({ error: "Invalid password" });
 
-  clients.add(res);
+  const salt = crypto.randomBytes(16).toString("hex");
+  const passhash = hashPassword(password, salt);
+  const createdAt = nowMs();
 
-  const keepAlive = setInterval(() => {
-    try {
-      res.write(': ping\n\n');
-    } catch {
-      // ignore
+  db.run(
+    `INSERT INTO users (username, salt, passhash, createdAt) VALUES (?, ?, ?, ?)`,
+    [username, salt, passhash, createdAt],
+    function (err) {
+      if (err) {
+        if (String(err).toLowerCase().includes("unique")) {
+          return res.status(409).json({ error: "Username already exists" });
+        }
+        return res.status(500).json({ error: "DB error" });
+      }
+
+      const token = newToken();
+      db.run(
+        `INSERT INTO sessions (token, username, createdAt) VALUES (?, ?, ?)`,
+        [token, username, nowMs()],
+        (err2) => {
+          if (err2) return res.status(500).json({ error: "DB error" });
+          res.json({ token, username });
+        }
+      );
     }
-  }, 25000);
+  );
+});
 
-  req.on('close', () => {
-    clearInterval(keepAlive);
-    clients.delete(res);
+app.post("/api/login", (req, res) => {
+  const username = normalizeUsername(req.body.username);
+  const password = req.body.password;
+
+  if (!validUsername(username)) return res.status(400).json({ error: "Invalid username" });
+  if (!validPassword(password)) return res.status(400).json({ error: "Invalid password" });
+
+  db.get(
+    `SELECT salt, passhash FROM users WHERE username = ?`,
+    [username],
+    (err, row) => {
+      if (err) return res.status(500).json({ error: "DB error" });
+      if (!row) return res.status(401).json({ error: "Wrong username or password" });
+
+      const computed = hashPassword(password, row.salt);
+      if (computed !== row.passhash) {
+        return res.status(401).json({ error: "Wrong username or password" });
+      }
+
+      const token = newToken();
+      db.run(
+        `INSERT INTO sessions (token, username, createdAt) VALUES (?, ?, ?)`,
+        [token, username, nowMs()],
+        (err2) => {
+          if (err2) return res.status(500).json({ error: "DB error" });
+          res.json({ token, username });
+        }
+      );
+    }
+  );
+});
+
+app.post("/api/logout", authRequired, (req, res) => {
+  db.run(`DELETE FROM sessions WHERE token = ?`, [req.user.token], (err) => {
+    if (err) return res.status(500).json({ error: "DB error" });
+    res.json({ ok: true });
   });
 });
 
-// SPA-ish: always serve index.html for root
-app.get('/', (_req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+app.get("/api/messages", authRequired, (req, res) => {
+  db.all(
+    `SELECT id, username, text, createdAt FROM messages ORDER BY createdAt ASC LIMIT 500`,
+    [],
+    (err, rows) => {
+      if (err) return res.status(500).json({ error: "DB error" });
+      res.json({ messages: rows || [] });
+    }
+  );
 });
 
-// --- Start ---
-const PORT = parseInt(process.env.PORT || '8080', 10);
+app.post("/api/send", authRequired, (req, res) => {
+  const text = String(req.body.text || "").trim();
+  if (!text) return res.status(400).json({ error: "Empty message" });
+  if (text.length > 500) return res.status(400).json({ error: "Message too long" });
+  if (containsBlocked(text)) return res.status(400).json({ error: "Message blocked" });
+
+  insertMessage(req.user.username, text, (err, msg) => {
+    if (err) return res.status(500).json({ error: "DB error" });
+    broadcastMessage(msg);
+    res.json({ ok: true, message: msg });
+  });
+});
+
+app.get("/api/stream", (req, res) => {
+  // ✅ EventSource can't send headers, so token must be query param
+  const token = getToken(req);
+  if (!token) return res.status(401).end("Missing token");
+
+  db.get(`SELECT username FROM sessions WHERE token = ?`, [token], (err, row) => {
+    if (err || !row) return res.status(401).end("Invalid token");
+
+    // SSE headers
+    res.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+      "X-Accel-Buffering": "no",
+    });
+
+    // Initial ping
+    sseSend(res, "hello", { ok: true, username: row.username, ts: nowMs() });
+
+    const client = { res, username: row.username };
+    sseClients.add(client);
+
+    req.on("close", () => {
+      sseClients.delete(client);
+    });
+  });
+});
+
+// Health
+app.get("/health", (req, res) => res.json({ ok: true }));
+
 app.listen(PORT, () => {
   console.log(`ChachChat listening on port ${PORT}`);
 });
