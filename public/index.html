@@ -1,95 +1,87 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>ChachChat</title>
-  <link rel="icon" href="/favicon.ico"/>
-  <link rel="stylesheet" href="/styles.css"/>
+  <link rel="icon" href="/favicon.ico" />
+  <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
-  <div class="bg"></div>
+  <div class="bg" aria-hidden="true"></div>
 
   <header class="topbar">
     <div class="brand">
-      <img class="brand-logo" src="/logo.png" alt="ChachChat logo" onerror="this.style.display='none'"/>
-      <div class="brand-text">
-        <div class="brand-name">ChachChat</div>
-        <div class="brand-sub">Realtime chat • no refresh needed</div>
+      <img class="brandLogo" src="/logo.png" alt="ChachChat logo" onerror="this.style.display='none'" />
+      <div>
+        <div class="brandTitle">ChachChat</div>
+        <div class="brandSub">Realtime chat • no refresh needed</div>
       </div>
     </div>
 
-    <div class="account">
-      <div class="who" id="who">Not signed in</div>
-      <button class="btn" id="btnLogout" hidden>Log out</button>
+    <div class="topActions">
+      <div id="who" class="who">Not signed in</div>
+      <button id="btnLogout" class="btn" type="button" hidden>Log out</button>
     </div>
   </header>
 
   <main class="layout">
-    <section class="chat card">
-      <div class="card-header">
-        <div class="title">Chat</div>
+    <section class="card chatCard">
+      <div class="cardHeader">
+        <div class="cardTitle">Chat</div>
         <div class="status" id="status"><span class="dot"></span>Disconnected</div>
       </div>
 
       <div id="messages" class="messages" aria-live="polite"></div>
 
       <form id="form" class="composer" autocomplete="off">
-        <input id="text" class="input" placeholder="Type a message…" maxlength="500" />
-        <button class="btn primary" type="submit">Send</button>
+        <input id="text" class="input" type="text" placeholder="Type a message…" maxlength="500" />
+        <button class="btn btnPrimary" type="submit">Send</button>
       </form>
-      <div class="hint">Tip: hit <b>Enter</b> to send.</div>
+      <div class="hint">Tip: hit Enter to send.</div>
     </section>
 
-    <aside class="side card">
-      <div class="title">Rules</div>
+    <aside class="card sideCard">
+      <div class="cardTitle">Rules</div>
       <ul class="rules">
         <li>Be respectful.</li>
         <li>Username + password required.</li>
         <li>Chat updates live for everyone.</li>
       </ul>
-      <div class="footer-note">
+      <div class="muted">
         This demo stores users + messages in SQLite. If the server redeploys, history may reset.
       </div>
     </aside>
   </main>
 
   <!-- Auth Modal -->
-  <div class="modal-backdrop" id="authBackdrop" hidden></div>
-  <div class="modal" id="authModal" role="dialog" aria-modal="true" aria-labelledby="authTitle" hidden>
-    <div class="modal-head">
-      <div class="modal-brand">
-        <img class="modal-logo" src="/logo.png" alt="ChachChat logo" onerror="this.style.display='none'"/>
-        <div>
-          <div class="modal-title" id="authTitle">Welcome to ChachChat</div>
-          <div class="modal-sub">Create an account or sign in to chat.</div>
-        </div>
+  <div id="authBackdrop" class="backdrop" hidden></div>
+  <div id="authModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="authTitle" hidden>
+    <div class="modalHeader">
+      <img class="modalLogo" src="/logo.png" alt="" onerror="this.style.display='none'" />
+      <div>
+        <div id="authTitle" class="modalTitle">Welcome to ChachChat</div>
+        <div class="modalSub">Create an account or sign in to chat.</div>
       </div>
     </div>
 
     <div class="tabs">
-      <button class="tab active" id="tabLogin" type="button">Sign in</button>
-      <button class="tab" id="tabRegister" type="button">Create account</button>
+      <button id="tabLogin" class="tab active" type="button">Sign in</button>
+      <button id="tabRegister" class="tab" type="button">Create account</button>
     </div>
 
-    <div class="modal-body">
-      <div class="error" id="authError" hidden></div>
+    <div id="authError" class="alert" hidden></div>
 
-      <div class="field">
-        <label for="authUser">Username</label>
-        <input id="authUser" class="input" placeholder="e.g., Kyle" maxlength="24" />
-      </div>
+    <label class="label" for="authUser">Username</label>
+    <input id="authUser" class="input" type="text" placeholder="e.g. Kyle" maxlength="24" />
 
-      <div class="field">
-        <label for="authPass">Password</label>
-        <input id="authPass" class="input" type="password" placeholder="Your password" maxlength="64" />
-      </div>
+    <label class="label" for="authPass">Password</label>
+    <input id="authPass" class="input" type="password" placeholder="Your password" maxlength="64" />
 
-      <button class="btn primary full" id="authSubmit" type="button">Sign in</button>
+    <button id="authSubmit" class="btn btnPrimary btnWide" type="button">Sign in</button>
 
-      <div class="smallprint">
-        Username allowed: letters, numbers, spaces, <code>_ . -</code> (2–24 chars). Password: 4–64 chars.
-      </div>
+    <div class="fineprint">
+      Username allowed: letters, numbers, spaces, <code>_ - .</code> (2–24 chars). Password: 4–64 chars.
     </div>
   </div>
 

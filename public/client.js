@@ -3,8 +3,8 @@
 
   const messagesEl = $("messages");
   const form = $("form");
-  const textEl = $("text");
-  const whoEl = $("who");
+  const text = $("text");
+  const who = $("who");
   const statusEl = $("status");
   const btnLogout = $("btnLogout");
 
@@ -17,15 +17,15 @@
   const tabLogin = $("tabLogin");
   const tabRegister = $("tabRegister");
 
-  let mode = "login"; // "login" or "register"
-  let token = localStorage.getItem("chachchat_token") || "";
-  let username = localStorage.getItem("chachchat_username") || "";
+  let mode = "login"; // or "register"
   let es = null;
+  let lastId = 0;
   let pollTimer = null;
 
   function setConnected(on) {
+    statusEl.classList.toggle("connected", !!on);
     statusEl.innerHTML = on
-      ? '<span class="dot ok"></span>Connected'
+      ? '<span class="dot"></span>Connected'
       : '<span class="dot"></span>Disconnected';
   }
 
@@ -33,21 +33,20 @@
     authModal.hidden = !show;
     authBackdrop.hidden = !show;
     if (show) {
-      authUser.value = username || "";
+      authUser.value = "";
       authPass.value = "";
       authUser.focus();
-      setAuthError("");
     }
   }
 
   function setAuthError(msg) {
-    if (msg) {
-      authError.hidden = false;
-      authError.textContent = msg;
-    } else {
+    if (!msg) {
       authError.hidden = true;
       authError.textContent = "";
+      return;
     }
+    authError.hidden = false;
+    authError.textContent = msg;
   }
 
   function setMode(next) {
@@ -55,78 +54,70 @@
     tabLogin.classList.toggle("active", mode === "login");
     tabRegister.classList.toggle("active", mode === "register");
     authSubmit.textContent = mode === "login" ? "Sign in" : "Create account";
+    setAuthError("");
   }
 
   tabLogin.addEventListener("click", () => setMode("login"));
   tabRegister.addEventListener("click", () => setMode("register"));
 
   async function api(path, opts = {}) {
-    const headers = Object.assign({ "Content-Type": "application/json" }, opts.headers || {});
-    const init = Object.assign({}, opts, { headers });
-    if (token) headers.Authorization = `Bearer ${token}`;
-    const res = await fetch(path, init);
-    const isJson = (res.headers.get("content-type") || "").includes("application/json");
-    const data = isJson ? await res.json().catch(() => ({})) : await res.text().catch(() => "");
+    const res = await fetch(path, {
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      ...opts
+    });
+    const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-      const msg = (data && data.error) ? data.error : `Request failed (${res.status})`;
+      const msg = data?.error || `Request failed (${res.status})`;
       throw new Error(msg);
     }
     return data;
   }
 
-  function escapeHtml(s) {
-    return (s || "")
-      .replaceAll("&", "&amp;")
-      .replaceAll("<", "&lt;")
-      .replaceAll(">", "&gt;")
-      .replaceAll('"', "&quot;")
-      .replaceAll("'", "&#039;");
-  }
-
-  function formatTime(ms) {
-    const d = new Date(ms);
-    if (isNaN(d.getTime())) return "";
+  function fmtTime(iso) {
+    if (!iso) return "";
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return "";
     return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   }
 
-  function renderMessages(list) {
-    messagesEl.innerHTML = "";
-    for (const m of list) addMessage(m, true);
-    messagesEl.scrollTop = messagesEl.scrollHeight;
+  function escapeHtml(s) {
+    return s.replace(/[&<>"']/g, (c) => ({
+      "&":"&amp;",
+      "<":"&lt;",
+      ">":"&gt;",
+      '"':"&quot;",
+      "'":"&#39;"
+    }[c]));
   }
 
-  function addMessage(m, silent = false) {
-    // ✅ Fix date: accept createdAt or created_at
-    const ts = m.createdAt ?? m.created_at ?? m.ts ?? Date.now();
-    const time = formatTime(ts);
+  function addMessage(m) {
+    if (!m || !m.id) return;
+    lastId = Math.max(lastId, m.id);
 
-    const row = document.createElement("div");
-    row.className = "msg";
-
-    row.innerHTML = `
-      <div class="msgMeta">
-        <span class="msgUser">${escapeHtml(m.username || "")}</span>
-        <span class="msgTime">${escapeHtml(time)}</span>
+    const div = document.createElement("div");
+    div.className = "msg";
+    div.innerHTML = `
+      <div class="msgTop">
+        <div class="msgUser">${escapeHtml(m.username || "")}</div>
+        <div class="msgTime">${escapeHtml(fmtTime(m.created_at))}</div>
       </div>
       <div class="msgText">${escapeHtml(m.text || "")}</div>
     `;
-
-    messagesEl.appendChild(row);
-
-    if (!silent) {
-      const nearBottom = (messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight) < 120;
-      if (nearBottom) messagesEl.scrollTop = messagesEl.scrollHeight;
-    }
+    messagesEl.appendChild(div);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
   }
 
-  async function loadMessages() {
-    const data = await api("/api/messages");
-    renderMessages(data.messages || []);
+  async function loadInitial() {
+    messagesEl.innerHTML = "";
+    lastId = 0;
+    const data = await api(`/api/messages?since=0&limit=50`, { method: "GET" });
+    for (const m of data.messages || []) addMessage(m);
   }
 
   function stopRealtime() {
     if (es) {
-      try { es.close(); } catch (_) {}
+      try { es.close(); } catch {}
       es = null;
     }
     if (pollTimer) {
@@ -140,122 +131,112 @@
     if (pollTimer) return;
     pollTimer = setInterval(async () => {
       try {
-        await loadMessages();
-      } catch (_) {}
+        const data = await api(`/api/messages?since=${lastId}&limit=200`, { method: "GET" });
+        const msgs = data.messages || [];
+        if (msgs.length) {
+          for (const m of msgs) addMessage(m);
+        }
+        setConnected(true);
+      } catch {
+        setConnected(false);
+      }
     }, 2500);
   }
 
   function startRealtime() {
     stopRealtime();
 
-    // ✅ SSE must pass token in query string (EventSource can't send headers)
-    const url = `/api/stream?token=${encodeURIComponent(token)}`;
-    es = new EventSource(url);
-
-    es.addEventListener("open", () => {
-      setConnected(true);
-    });
-
-    es.addEventListener("hello", () => {
-      setConnected(true);
-    });
-
-    es.addEventListener("message", (ev) => {
-      try {
-        const msg = JSON.parse(ev.data);
-        addMessage(msg);
-      } catch (_) {}
-    });
-
-    es.addEventListener("error", () => {
-      setConnected(false);
-      // Some networks/proxies break SSE; keep chat "auto-refresh" via polling fallback
-      startPollingFallback();
-    });
-  }
-
-  async function doAuth() {
-    const u = (authUser.value || "").trim();
-    const p = (authPass.value || "").trim();
-
-    if (!u || u.length < 2) return setAuthError("Username is required.");
-    if (!p || p.length < 4) return setAuthError("Password must be at least 4 characters.");
-
+    // Try SSE first
     try {
-      const data = await api(mode === "login" ? "/api/login" : "/api/register", {
-        method: "POST",
-        body: JSON.stringify({ username: u, password: p }),
-        headers: {} // no bearer token yet
+      es = new EventSource("/api/stream", { withCredentials: true });
+      es.addEventListener("open", () => setConnected(true));
+      es.addEventListener("error", () => {
+        setConnected(false);
+        try { es.close(); } catch {}
+        es = null;
+        startPollingFallback();
       });
-
-      token = data.token;
-      username = data.username;
-
-      localStorage.setItem("chachchat_token", token);
-      localStorage.setItem("chachchat_username", username);
-
-      whoEl.textContent = username;
-      showAuth(false);
-
-      await loadMessages();
-      startRealtime();
-    } catch (e) {
-      setAuthError(e.message || "Request failed");
+      es.addEventListener("message", (ev) => {
+        try {
+          const m = JSON.parse(ev.data);
+          addMessage(m);
+        } catch {}
+      });
+      // safety fallback: if SSE doesn't open quickly, poll
+      setTimeout(() => {
+        if (!es) return;
+        // if not connected yet, start polling too
+        if (!statusEl.classList.contains("connected")) startPollingFallback();
+      }, 2000);
+    } catch {
+      startPollingFallback();
     }
   }
 
-  authSubmit.addEventListener("click", (e) => {
-    e.preventDefault();
-    doAuth();
+  async function ensureSignedIn() {
+    try {
+      const me = await api("/api/me", { method: "GET" });
+      who.textContent = `You are: ${me.username}`;
+      btnLogout.hidden = false;
+      showAuth(false);
+      setAuthError("");
+      await loadInitial();
+      startRealtime();
+      return true;
+    } catch {
+      who.textContent = "Not signed in";
+      btnLogout.hidden = true;
+      showAuth(true);
+      stopRealtime();
+      return false;
+    }
+  }
+
+  authSubmit.addEventListener("click", async () => {
+    const username = authUser.value.trim();
+    const password = authPass.value;
+    setAuthError("");
+
+    try {
+      if (mode === "login") {
+        await api("/api/login", { method: "POST", body: JSON.stringify({ username, password }) });
+      } else {
+        await api("/api/register", { method: "POST", body: JSON.stringify({ username, password }) });
+      }
+      await ensureSignedIn();
+    } catch (e) {
+      setAuthError(e.message || "Request failed");
+    }
   });
 
   authPass.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") doAuth();
+    if (e.key === "Enter") authSubmit.click();
+  });
+  authUser.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") authPass.focus();
+  });
+
+  btnLogout.addEventListener("click", async () => {
+    try { await api("/api/logout", { method: "POST", body: "{}" }); } catch {}
+    await ensureSignedIn();
   });
 
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
-    const text = (textEl.value || "").trim();
-    if (!text) return;
-    textEl.value = "";
+    const msg = text.value.trim();
+    if (!msg) return;
+    text.value = "";
     try {
-      await api("/api/send", {
-        method: "POST",
-        body: JSON.stringify({ text })
-      });
-      // message arrives via SSE (or polling)
-    } catch (err) {
-      // Put text back if failed
-      textEl.value = text;
-      alert(err.message || "Send failed");
+      await api("/api/messages", { method: "POST", body: JSON.stringify({ text: msg }) });
+      // message will appear via SSE/poll; but in case of latency, fetch quickly
+      setTimeout(() => startPollingFallback(), 0);
+    } catch (e) {
+      // if auth expired, prompt sign in
+      await ensureSignedIn();
     }
   });
 
-  btnLogout.addEventListener("click", async () => {
-    try { await api("/api/logout", { method: "POST" }); } catch (_) {}
-    token = "";
-    username = "";
-    localStorage.removeItem("chachchat_token");
-    localStorage.removeItem("chachchat_username");
-    whoEl.textContent = "";
-    stopRealtime();
-    showAuth(true);
-  });
-
-  // ---- boot ----
-  whoEl.textContent = username || "";
-  if (!token) {
-    showAuth(true);
-  } else {
-    // validate by loading messages; if fails show auth
-    loadMessages()
-      .then(() => startRealtime())
-      .catch(() => {
-        token = "";
-        localStorage.removeItem("chachchat_token");
-        showAuth(true);
-      });
-  }
-
-  // Clicking backdrop doesn't close (forces auth)
+  // boot
+  setMode("login");
+  ensureSignedIn();
 })();
