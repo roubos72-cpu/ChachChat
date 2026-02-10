@@ -4,22 +4,24 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>ChachChat</title>
+  <link rel="icon" href="/favicon.ico" />
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
-  <div class="bg"></div>
+  <div class="bg" aria-hidden="true"></div>
 
   <header class="topbar">
     <div class="brand">
-      <img class="brandLogo" src="/logo.png" alt="ChachChat Logo" />
+      <img class="brandLogo" src="/logo.png" alt="ChachChat logo" onerror="this.style.display='none'" />
       <div>
         <div class="brandTitle">ChachChat</div>
-        <div class="brandSub">Realtime chat</div>
+        <div class="brandSub">Realtime chat • no refresh needed</div>
       </div>
     </div>
+
     <div class="topActions">
-      <span id="who" class="who">Not signed in</span>
-      <button id="btnLogout" class="btn" type="button">Log out</button>
+      <div id="who" class="who">Not signed in</div>
+      <button id="btnLogout" class="btn" type="button" hidden>Log out</button>
     </div>
   </header>
 
@@ -30,25 +32,58 @@
         <div class="status" id="status"><span class="dot"></span>Disconnected</div>
       </div>
 
-      <div id="messages" class="messages"></div>
+      <div id="messages" class="messages" aria-live="polite"></div>
 
-      <form id="form" class="composer">
-        <input id="text" class="input" type="text" placeholder="Type a message…" />
+      <form id="form" class="composer" autocomplete="off">
+        <input id="text" class="input" type="text" placeholder="Type a message…" maxlength="500" />
         <button class="btn btnPrimary" type="submit">Send</button>
       </form>
+      <div class="hint">Tip: hit Enter to send.</div>
     </section>
 
     <aside class="card sideCard">
       <div class="cardTitle">Rules</div>
-
-      <img src="/logo.png" alt="ChachChat Logo" class="rules-logo" />
-
-      <p class="rules-text">
-        There is only one rule:<br />
-        <strong>no rules.</strong>
-      </p>
+      <ul class="rules">
+        <li>Be respectful.</li>
+        <li>Username + password required.</li>
+        <li>Chat updates live for everyone.</li>
+      </ul>
+      <div class="muted">
+        This demo stores users + messages in SQLite. If the server redeploys, history may reset.
+      </div>
     </aside>
   </main>
+
+  <!-- Auth Modal -->
+  <div id="authBackdrop" class="backdrop" hidden></div>
+  <div id="authModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="authTitle" hidden>
+    <div class="modalHeader">
+      <img class="modalLogo" src="/logo.png" alt="" onerror="this.style.display='none'" />
+      <div>
+        <div id="authTitle" class="modalTitle">Welcome to ChachChat</div>
+        <div class="modalSub">Create an account or sign in to chat.</div>
+      </div>
+    </div>
+
+    <div class="tabs">
+      <button id="tabLogin" class="tab active" type="button">Sign in</button>
+      <button id="tabRegister" class="tab" type="button">Create account</button>
+    </div>
+
+    <div id="authError" class="alert" hidden></div>
+
+    <label class="label" for="authUser">Username</label>
+    <input id="authUser" class="input" type="text" placeholder="e.g. Kyle" maxlength="24" />
+
+    <label class="label" for="authPass">Password</label>
+    <input id="authPass" class="input" type="password" placeholder="Your password" maxlength="64" />
+
+    <button id="authSubmit" class="btn btnPrimary btnWide" type="button">Sign in</button>
+
+    <div class="fineprint">
+      Username allowed: letters, numbers, spaces, <code>_ - .</code> (2–24 chars). Password: 4–64 chars.
+    </div>
+  </div>
 
   <script src="/client.js"></script>
 </body>
