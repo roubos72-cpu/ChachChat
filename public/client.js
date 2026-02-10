@@ -83,7 +83,7 @@
     const div = document.createElement("div");
     div.className = "msg";
 
-    const time = new Date(msg.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    const time = new Date((msg.created_at || msg.createdAt || msg.ts || msg.timestamp)).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
     div.innerHTML = `
       <div class="meta">
         <span class="user">${escapeHtml(msg.username)}</span>
