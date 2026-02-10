@@ -1,8 +1,10 @@
 {
   "name": "chachchat",
   "version": "1.0.0",
-  "description": "ChachChat - simple realtime chat with per-user passwords",
+  "private": true,
+  "description": "ChachChat - simple realtime chat with per-user accounts",
   "main": "index.js",
+  "type": "commonjs",
   "scripts": {
     "start": "node index.js"
   },
@@ -11,6 +13,7 @@
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
-    "express": "^4.19.2"
+    "express": "^4.19.2",
+    "sqlite3": "^5.1.7"
   }
 }
