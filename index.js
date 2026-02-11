@@ -170,9 +170,6 @@ async function createSession(username, res) {
 
 // ---- simple in-memory SSE hub
 const sseClients = new Set();
-// Presence tracking (who is online)
-const presenceCounts = new Map(); // username -> number of open streams
-
 function sseBroadcast(event, dataObj) {
   const payload = `event: ${event}\ndata: ${JSON.stringify(dataObj)}\n\n`;
   for (const res of sseClients) {
@@ -182,17 +179,33 @@ function sseBroadcast(event, dataObj) {
   }
 }
 
-function onlineList() {
-  return Array.from(presenceCounts.keys()).sort((a,b)=>a.localeCompare(b));
+// ---- presence tracking (online users)
+const presenceCounts = new Map(); // username -> number of active SSE connections
+
+function getOnlineUsers() {
+  return Array.from(presenceCounts.keys()).sort((a, b) => a.localeCompare(b));
 }
 
-function bumpPresence(username, delta) {
-  const prev = presenceCounts.get(username) || 0;
-  const next = prev + delta;
-  if (next <= 0) presenceCounts.delete(username);
-  else presenceCounts.set(username, next);
-  sseBroadcast(\"presence\", { online: onlineList() });
+function presenceInc(username) {
+  const n = presenceCounts.get(username) || 0;
+  presenceCounts.set(username, n + 1);
+  if (n === 0) {
+    // user just came online
+    sseBroadcast("presence", { online: getOnlineUsers() });
+  }
 }
+
+function presenceDec(username) {
+  const n = presenceCounts.get(username) || 0;
+  if (n <= 1) {
+    if (presenceCounts.has(username)) presenceCounts.delete(username);
+    // user went offline
+    sseBroadcast("presence", { online: getOnlineUsers() });
+  } else {
+    presenceCounts.set(username, n - 1);
+  }
+}
+
 
 // ---- API
 app.post("/api/register", async (req, res) => {
@@ -263,7 +276,7 @@ app.get("/api/me", requireAuth, async (req, res) => {
 });
 
 app.get("/api/online", requireAuth, async (req, res) => {
-  res.json({ ok: true, online: onlineList() });
+  res.json({ ok: true, online: getOnlineUsers() });
 });
 
 app.get("/api/messages", requireAuth, async (req, res) => {
@@ -316,21 +329,27 @@ app.get("/api/stream", requireAuth, async (req, res) => {
   res.setHeader("Connection", "keep-alive");
   res.flushHeaders?.();
 
-  res.write(`event: hello\ndata: ${JSON.stringify({ ok: true })}\n\n`);
+  const username = req.user.username;
+
+  // hello + initial presence snapshot
+  res.write(`event: hello
+data: ${JSON.stringify({ ok: true })}
+
+`);
+  res.write(`event: presence
+data: ${JSON.stringify({ online: getOnlineUsers() })}
+
+`);
+
   sseClients.add(res);
-
-  // mark this user online for as long as this stream is open
-  bumpPresence(req.user.username, +1);
-
-  // send an initial presence snapshot
-  res.write(`event: presence\ndata: ${JSON.stringify({ online: onlineList() })}\n\n`);
-
+  presenceInc(username);
 
   req.on("close", () => {
     sseClients.delete(res);
-    bumpPresence(req.user.username, -1);
+    presenceDec(username);
   });
 });
+
 
 // ---- static UI
 app.use(express.static(path.join(__dirname, "public"), {
