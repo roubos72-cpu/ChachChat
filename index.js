@@ -323,31 +323,30 @@ app.post("/api/messages", requireAuth, async (req, res) => {
 });
 
 // SSE stream
-app.get("/api/stream", requireAuth, async (req, res) => {
-  res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
-  res.setHeader("Cache-Control", "no-cache, no-transform");
-  res.setHeader("Connection", "keep-alive");
-  res.flushHeaders?.();
+app.get("/api/stream", (req, res) => {
+  const user =
+    req.query.user ||
+    "Guest-" + Math.random().toString(36).slice(2, 7);
 
-  const username = req.user.username;
-
-  // hello + initial presence snapshot
-  res.write(`event: hello
-data: ${JSON.stringify({ ok: true })}
-
-`);
-  res.write(`event: presence
-data: ${JSON.stringify({ online: getOnlineUsers() })}
-
-`);
-
-  sseClients.add(res);
-  presenceInc(username);
+  KNOWN_USERS.add(user);
+  onlineUsers.add(user);
+  sseBroadcast("presence", {
+    users: Array.from(KNOWN_USERS).map((u) => ({
+      name: u,
+      online: onlineUsers.has(u),
+    })),
+  });
 
   req.on("close", () => {
-    sseClients.delete(res);
-    presenceDec(username);
+    onlineUsers.delete(user);
+    sseBroadcast("presence", {
+      users: Array.from(KNOWN_USERS).map((u) => ({
+        name: u,
+        online: onlineUsers.has(u),
+      })),
+    });
   });
+});
 });
 
 
