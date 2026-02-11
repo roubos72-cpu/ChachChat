@@ -347,10 +347,6 @@ app.get("/api/stream", (req, res) => {
     });
   });
 });
-});
-
-
-// ---- static UI
 app.use(express.static(path.join(__dirname, "public"), {
   etag: true,
   maxAge: "1h",
@@ -360,14 +356,8 @@ app.use(express.static(path.join(__dirname, "public"), {
       res.setHeader("Cache-Control", "no-cache");
     }
   }
-}));
-
-// SPA-ish: always serve index.html for root
 app.get("/", (req, res) => {
   res.sendFile(path.join(__dirname, "public", "index.html"));
-});
-
-// ---- start
 initDb().then(() => {
   app.listen(PORT, () => {
     console.log(`ChachChat listening on port ${PORT}`);
@@ -375,4 +365,3 @@ initDb().then(() => {
 }).catch((e) => {
   console.error("Failed to init DB", e);
   process.exit(1);
-});
