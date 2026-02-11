@@ -42,14 +42,22 @@
     </section>
 
     <aside class="card sideCard">
-  <div class="cardHeader">
-    <div class="cardTitle">Online</div>
-    <div class="onlineCount" id="onlineCount">0</div>
-  </div>
+      <div class="cardTitle">Online</div>
+      <div id="onlineCount" class="onlineCount">0 online</div>
+      <ul id="onlineList" class="onlineList" aria-label="Online users"></ul>
 
-  <ul class="onlineList" id="onlineList"></ul>
-  <div class="muted small">Users currently connected.</div>
-</aside>
+      <div class="sep" aria-hidden="true"></div>
+
+      <div class="cardTitle">Rules</div>
+      <ul class="rules">
+        <li>Be respectful.</li>
+        <li>Username + password required.</li>
+        <li>Chat updates live for everyone.</li>
+      </ul>
+      <div class="muted">
+        This demo stores users + messages in SQLite. If the server redeploys, history may reset.
+      </div>
+    </aside>
   </main>
 
   <!-- Auth Modal -->

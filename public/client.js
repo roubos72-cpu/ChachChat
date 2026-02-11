@@ -7,9 +7,8 @@
   const who = $("who");
   const statusEl = $("status");
   const btnLogout = $("btnLogout");
-
-  const onlineListEl = $("onlineList");
   const onlineCountEl = $("onlineCount");
+  const onlineListEl = $("onlineList");
 
   const authModal = $("authModal");
   const authBackdrop = $("authBackdrop");
@@ -24,12 +23,35 @@
   let es = null;
   let lastId = 0;
   let pollTimer = null;
+  let onlinePollTimer = null;
 
   function setConnected(on) {
     statusEl.classList.toggle("connected", !!on);
     statusEl.innerHTML = on
       ? '<span class="dot"></span>Connected'
       : '<span class="dot"></span>Disconnected';
+  }
+
+
+  function renderOnline(list) {
+    if (!onlineCountEl || !onlineListEl) return;
+    const arr = Array.isArray(list) ? list : [];
+    onlineCountEl.textContent = `${arr.length} online`;
+    onlineListEl.innerHTML = "";
+    for (const u of arr) {
+      const li = document.createElement("li");
+      li.textContent = u;
+      onlineListEl.appendChild(li);
+    }
+  }
+
+  async function refreshOnline() {
+    try {
+      const data = await api("/api/online", { method: "GET" });
+      renderOnline(data.online);
+    } catch {
+      // ignore
+    }
   }
 
   function showAuth(show) {
@@ -84,35 +106,7 @@
     return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   }
 
-  function renderOnline(list) {
-  const online = Array.isArray(list) ? list : [];
-  if (onlineCountEl) onlineCountEl.textContent = String(online.length);
-  if (!onlineListEl) return;
-  onlineListEl.innerHTML = "";
-  if (!online.length) {
-    const li = document.createElement("li");
-    li.className = "onlineEmpty";
-    li.textContent = "No one yet";
-    onlineListEl.appendChild(li);
-    return;
-  }
-  for (const name of online) {
-    const li = document.createElement("li");
-    li.innerHTML = `<span class="pip"></span><span>${escapeHtml(name)}</span>`;
-    onlineListEl.appendChild(li);
-  }
-}
-
-async function loadOnline() {
-  try {
-    const data = await api("/api/online", { method: "GET" });
-    renderOnline(data.online || []);
-  } catch {
-    renderOnline([]);
-  }
-}
-
-function escapeHtml(s) {
+  function escapeHtml(s) {
     return s.replace(/[&<>"']/g, (c) => ({
       "&":"&amp;",
       "<":"&lt;",
@@ -155,11 +149,17 @@ function escapeHtml(s) {
       clearInterval(pollTimer);
       pollTimer = null;
     }
+    if (onlinePollTimer) {
+      clearInterval(onlinePollTimer);
+      onlinePollTimer = null;
+    }
     setConnected(false);
+    renderOnline([]);
   }
 
   function startPollingFallback() {
     if (pollTimer) return;
+
     pollTimer = setInterval(async () => {
       try {
         const data = await api(`/api/messages?since=${lastId}&limit=200`, { method: "GET" });
@@ -172,16 +172,23 @@ function escapeHtml(s) {
         setConnected(false);
       }
     }, 2500);
+
+    // Presence updates (cheap + separate cadence)
+    if (!onlinePollTimer) {
+      onlinePollTimer = setInterval(() => {
+        refreshOnline();
+      }, 5000);
+    }
   }
+
 
   function startRealtime() {
     stopRealtime();
 
     // Try SSE first
     try {
-      loadOnline();
       es = new EventSource("/api/stream", { withCredentials: true });
-      es.addEventListener("open", () => setConnected(true));
+      es.addEventListener("open", () => { setConnected(true); refreshOnline(); });
       es.addEventListener("error", () => {
         setConnected(false);
         try { es.close(); } catch {}
@@ -194,18 +201,23 @@ function escapeHtml(s) {
           addMessage(m);
         } catch {}
       });
-
       es.addEventListener("presence", (ev) => {
         try {
-          const payload = JSON.parse(ev.data);
-          renderOnline(payload.online || []);
+          const p = JSON.parse(ev.data);
+          renderOnline(p.online);
         } catch {}
       });
+
       // safety fallback: if SSE doesn't open quickly, poll
       setTimeout(() => {
         if (!es) return;
         // if not connected yet, start polling too
         if (!statusEl.classList.contains("connected")) startPollingFallback();
+
+      // keep presence somewhat fresh even if presence events are missed
+      if (!onlinePollTimer) {
+        onlinePollTimer = setInterval(() => refreshOnline(), 8000);
+      }
       }, 2000);
     } catch {
       startPollingFallback();
@@ -220,8 +232,8 @@ function escapeHtml(s) {
       showAuth(false);
       setAuthError("");
       await loadInitial();
-      await loadOnline();
       startRealtime();
+      refreshOnline();
       return true;
     } catch {
       who.textContent = "Not signed in";
