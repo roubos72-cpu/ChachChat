@@ -170,6 +170,9 @@ async function createSession(username, res) {
 
 // ---- simple in-memory SSE hub
 const sseClients = new Set();
+// Presence tracking (who is online)
+const presenceCounts = new Map(); // username -> number of open streams
+
 function sseBroadcast(event, dataObj) {
   const payload = `event: ${event}\ndata: ${JSON.stringify(dataObj)}\n\n`;
   for (const res of sseClients) {
@@ -177,6 +180,18 @@ function sseBroadcast(event, dataObj) {
       res.write(payload);
     } catch {}
   }
+}
+
+function onlineList() {
+  return Array.from(presenceCounts.keys()).sort((a,b)=>a.localeCompare(b));
+}
+
+function bumpPresence(username, delta) {
+  const prev = presenceCounts.get(username) || 0;
+  const next = prev + delta;
+  if (next <= 0) presenceCounts.delete(username);
+  else presenceCounts.set(username, next);
+  sseBroadcast(\"presence\", { online: onlineList() });
 }
 
 // ---- API
@@ -247,6 +262,10 @@ app.get("/api/me", requireAuth, async (req, res) => {
   res.json({ ok: true, username: req.user.username });
 });
 
+app.get("/api/online", requireAuth, async (req, res) => {
+  res.json({ ok: true, online: onlineList() });
+});
+
 app.get("/api/messages", requireAuth, async (req, res) => {
   try {
     const since = Number(req.query.since || 0);
@@ -300,8 +319,16 @@ app.get("/api/stream", requireAuth, async (req, res) => {
   res.write(`event: hello\ndata: ${JSON.stringify({ ok: true })}\n\n`);
   sseClients.add(res);
 
+  // mark this user online for as long as this stream is open
+  bumpPresence(req.user.username, +1);
+
+  // send an initial presence snapshot
+  res.write(`event: presence\ndata: ${JSON.stringify({ online: onlineList() })}\n\n`);
+
+
   req.on("close", () => {
     sseClients.delete(res);
+    bumpPresence(req.user.username, -1);
   });
 });
 
