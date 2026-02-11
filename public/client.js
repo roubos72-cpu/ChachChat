@@ -8,6 +8,9 @@
   const statusEl = $("status");
   const btnLogout = $("btnLogout");
 
+  const onlineListEl = $("onlineList");
+  const onlineCountEl = $("onlineCount");
+
   const authModal = $("authModal");
   const authBackdrop = $("authBackdrop");
   const authError = $("authError");
@@ -81,7 +84,35 @@
     return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   }
 
-  function escapeHtml(s) {
+  function renderOnline(list) {
+  const online = Array.isArray(list) ? list : [];
+  if (onlineCountEl) onlineCountEl.textContent = String(online.length);
+  if (!onlineListEl) return;
+  onlineListEl.innerHTML = "";
+  if (!online.length) {
+    const li = document.createElement("li");
+    li.className = "onlineEmpty";
+    li.textContent = "No one yet";
+    onlineListEl.appendChild(li);
+    return;
+  }
+  for (const name of online) {
+    const li = document.createElement("li");
+    li.innerHTML = `<span class="pip"></span><span>${escapeHtml(name)}</span>`;
+    onlineListEl.appendChild(li);
+  }
+}
+
+async function loadOnline() {
+  try {
+    const data = await api("/api/online", { method: "GET" });
+    renderOnline(data.online || []);
+  } catch {
+    renderOnline([]);
+  }
+}
+
+function escapeHtml(s) {
     return s.replace(/[&<>"']/g, (c) => ({
       "&":"&amp;",
       "<":"&lt;",
@@ -148,6 +179,7 @@
 
     // Try SSE first
     try {
+      loadOnline();
       es = new EventSource("/api/stream", { withCredentials: true });
       es.addEventListener("open", () => setConnected(true));
       es.addEventListener("error", () => {
@@ -160,6 +192,13 @@
         try {
           const m = JSON.parse(ev.data);
           addMessage(m);
+        } catch {}
+      });
+
+      es.addEventListener("presence", (ev) => {
+        try {
+          const payload = JSON.parse(ev.data);
+          renderOnline(payload.online || []);
         } catch {}
       });
       // safety fallback: if SSE doesn't open quickly, poll
@@ -181,6 +220,7 @@
       showAuth(false);
       setAuthError("");
       await loadInitial();
+      await loadOnline();
       startRealtime();
       return true;
     } catch {
