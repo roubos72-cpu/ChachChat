@@ -356,8 +356,11 @@ app.use(express.static(path.join(__dirname, "public"), {
       res.setHeader("Cache-Control", "no-cache");
     }
   }
+}));
 app.get("/", (req, res) => {
   res.sendFile(path.join(__dirname, "public", "index.html"));
+});
+
 initDb().then(() => {
   app.listen(PORT, () => {
     console.log(`ChachChat listening on port ${PORT}`);
@@ -365,3 +368,4 @@ initDb().then(() => {
 }).catch((e) => {
   console.error("Failed to init DB", e);
   process.exit(1);
+});
